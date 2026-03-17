@@ -37,7 +37,7 @@ body {
   text-align: center;
 }
 h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--primary-color); }
-#category-display { font-weight: 500; color: #555; margin-bottom: 10px; }
+#category-display { font-weight: 700; color: #555; margin-bottom: 10px; font-size: 1.1rem; }
 .booth-name {
   font-size: 1.25rem; font-weight: 700; margin: 1rem 0; padding: 1rem;
   background-color: var(--secondary-color); border-radius: 8px; display: none;
@@ -67,14 +67,14 @@ h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--primary-color); }
 <body>
 <div class="container">
   <h1 id="main-title">大会投票システム</h1>
-  <div id="category-display">部門の読み込み中...</div>
+  <div id="category-display">部門を判定中...</div>
   <div id="loader" class="loader"></div>
-  <div id="status-msg" class="status-message">環境の安全性と情報を確認しています...</div>
+  <div id="status-msg" class="status-message">環境を確認しています...</div>
   <div id="booth-display" class="booth-name"></div>
   <button id="vote-btn" class="vote-btn">このブースに投票する</button>
   <div id="check-process">
-    <div id="chk-env" class="check-item">端末固有認証: 待機中...</div>
-    <div id="chk-dup" class="check-item">重複投票チェック: 待機中...</div>
+    <div id="chk-env" class="check-item">端末認証: 待機中...</div>
+    <div id="chk-dup" class="check-item">投票権確認: 待機中...</div>
   </div>
 </div>
 
@@ -82,10 +82,11 @@ h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--primary-color); }
 // ==========================================
 // 設定・定数
 // ==========================================
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbygaielsC7TVAyE_vRn_gi-ckgzVgpuwOuIEqtY89tI9TqbIOEWGyYLPE6sAZI4VcEdoQ/exec"; // ここを自身のURLに書き換えてください
+// ※ここをご自身のURLに書き換えてください
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyj16P8-oOPwwf076T-q5CtKovmQiQ6JkAkO2rfkSQUt7jYrKmhlaoG-OOOe3wMRKVlVg/exec";
 const SECURITY_SALT = "V0t3_s3cUr1ty_S@lt_2026!"; 
 let currentBoothId = null;
-let currentCategory = "PRS"; // デフォルト
+let currentCategory = "PRS"; 
 let generatedVisitorId = null;
 
 // ==========================================
@@ -93,29 +94,30 @@ let generatedVisitorId = null;
 // ==========================================
 async function initialize() {
   try {
-    // URLから部門(Category)を特定するロジック
-    // 例: .../QRV2026-GP/ -> GP, .../QRV2026-UQ/ -> UQ
+    // URLパスから部門（GP, UQ等）を抽出
     const path = window.location.pathname;
-    const match = path.match(/QRV2026-([A-Z0-9]+)/);
-    if (match && match[1]) {
-      currentCategory = match[1];
+    const categoryMatch = path.match(/QRV2026-([A-Z0-9]+)/);
+    if (categoryMatch && categoryMatch[1]) {
+      currentCategory = categoryMatch[1];
     }
-    document.getElementById('category-display').textContent = `対象部門: ${currentCategory}`;
+    document.getElementById('category-display').textContent = `【${currentCategory}部門】`;
 
+    // URLパラメータからブースIDを取得
     const urlParams = new URLSearchParams(window.location.search);
     currentBoothId = urlParams.get('booth');
+    
     if (!currentBoothId) {
-      throw new Error("ブース情報がURLに含まれていません。正しいQRコードを読み込んでください。");
+      throw new Error("ブース情報が見つかりません。QRコードを正しくスキャンしてください。");
     }
-    document.getElementById('booth-display').textContent = `ブース番号: ${currentBoothId}`;
+    document.getElementById('booth-display').textContent = `投票先: ブース No.${currentBoothId}`;
 
-    // 部門別の重複チェック
+    // 1. 部門ごとの重複チェック（この部門にすでに投票したか）
     await checkLocalVoteRecord();
 
-    // フィンガープリント生成
+    // 2. 端末識別（フィンガープリント）生成
     generatedVisitorId = await generateFingerprint();
 
-    updateUI('ready', '準備完了。ボタンを押して投票してください。');
+    updateUI('ready', 'お一人につき各部門1回投票可能です。');
   } catch (error) {
     updateUI('error', error.message);
   }
@@ -125,22 +127,23 @@ async function initialize() {
 // 重複チェック (部門別)
 // ==========================================
 async function checkLocalVoteRecord() {
-  const key = `voted_${currentCategory}`; // 部門ごとにキーを分ける
+  const key = `voted_status_${currentCategory}`;
   const votedLocal = localStorage.getItem(key);
   
-  const cookies = document.cookie.split(';');
-  const votedCookie = cookies.some(c => c.trim().startsWith(`${key}=true`));
+  // Cookieでも補助的にチェック
+  const votedCookie = document.cookie.split(';').some(c => c.trim().startsWith(`${key}=true`));
 
   if (votedLocal || votedCookie) {
-    updateCheckItem('chk-dup', 'error', '既にこの部門への投票は完了しています');
-    throw new Error(`この部門 (${currentCategory}) には既に投票済みです。`);
+    updateCheckItem('chk-dup', 'error', '投票済み');
+    throw new Error(`${currentCategory}部門への投票はすでに完了しています。`);
   }
-  updateCheckItem('chk-dup', 'ok', '重複チェック: クリア');
+  updateCheckItem('chk-dup', 'ok', '未投票（投票可能です）');
 }
 
 async function saveLocalVoteRecord() {
-  const key = `voted_${currentCategory}`;
+  const key = `voted_status_${currentCategory}`;
   localStorage.setItem(key, 'true');
+  // 1年間有効なCookieをセット
   const d = new Date();
   d.setTime(d.getTime() + (365 * 24 * 60 * 60 * 1000));
   document.cookie = `${key}=true; expires=${d.toUTCString()}; path=/; SameSite=Strict`;
@@ -157,34 +160,36 @@ async function sha256(message) {
 
 async function generateFingerprint() {
   try {
+    // 端末の特性（画面サイズ、タイムゾーン、言語、ブラウザ情報）を組み合わせてIDを作成
     const components = [
       navigator.userAgent,
       screen.width + 'x' + screen.height,
       new Date().getTimezoneOffset(),
-      navigator.language
+      navigator.language,
+      navigator.platform
     ].join('||');
     const fp = await sha256(components);
-    updateCheckItem('chk-env', 'ok', '端末固有認証: 正常');
+    updateCheckItem('chk-env', 'ok', '端末認証: 完了');
     return fp;
   } catch (e) {
-    updateCheckItem('chk-env', 'error', '認証エラー');
-    throw e;
+    updateCheckItem('chk-env', 'error', '認証失敗');
+    throw new Error("端末認証に失敗しました。シークレットモードを解除して試してください。");
   }
 }
 
 async function submitVote() {
   const voteBtn = document.getElementById('vote-btn');
   voteBtn.disabled = true;
-  voteBtn.textContent = "投票処理中...";
+  voteBtn.textContent = "送信中...";
 
   try {
     const timestamp = new Date().getTime();
-    // 署名にCategoryも含めることで改ざんを防止
+    // 署名（改ざん防止）: 部門、ブース、端末ID、時間を結合
     const payloadString = `${currentCategory}:${currentBoothId}:${generatedVisitorId}:${timestamp}:${SECURITY_SALT}`;
     const signature = await sha256(payloadString);
 
     const postData = {
-      category: currentCategory, // 追加
+      category: currentCategory,
       boothId: currentBoothId,
       visitorId: generatedVisitorId,
       timestamp: timestamp,
@@ -198,22 +203,23 @@ async function submitVote() {
       body: JSON.stringify(postData)
     });
 
+    if (!response.ok) throw new Error("サーバーとの通信に失敗しました。");
+    
     const result = JSON.parse(await response.text());
 
     if (result.success) {
       await saveLocalVoteRecord();
       updateUI('success', `${currentCategory}部門への投票が完了しました！`);
     } else {
-      throw new Error(result.error || "投票エラー");
+      throw new Error(result.error || "投票を受け付けられませんでした。");
     }
   } catch (error) {
-    updateUI('error', `エラー: ${error.message}`);
+    updateUI('error', error.message);
     voteBtn.disabled = false;
-    voteBtn.textContent = "再試行する";
+    voteBtn.textContent = "もう一度試す";
   }
 }
 
-// UI操作ユーティリティ (既存と同様)
 function updateUI(state, message = "") {
   const loader = document.getElementById('loader');
   const statusMsg = document.getElementById('status-msg');
